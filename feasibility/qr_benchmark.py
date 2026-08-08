@@ -57,23 +57,25 @@ def bench(fn, urls, n):
     }
 
 
+# micro=False erzwingt echte QR-Codes; ohne das erzeugt segno für sehr kurze
+# URLs Micro-QR-Codes (Version "M1".."M4"), die viele Scanner nicht lesen.
 def segno_matrix(u):
     import segno
-    segno.make(u, error="m")
+    segno.make(u, error="m", micro=False)
     return None
 
 
 def segno_png(u):
     import segno
     buf = io.BytesIO()
-    segno.make(u, error="m").save(buf, kind="png", scale=4)
+    segno.make(u, error="m", micro=False).save(buf, kind="png", scale=4)
     return buf.getbuffer().nbytes
 
 
 def segno_svg(u):
     import segno
     buf = io.BytesIO()
-    segno.make(u, error="m").save(buf, kind="svg", scale=4)
+    segno.make(u, error="m", micro=False).save(buf, kind="svg", scale=4)
     return buf.getbuffer().nbytes
 
 
@@ -89,7 +91,7 @@ def worker_chunk(chunk):
     t0 = time.perf_counter()
     for u in chunk:
         buf = io.BytesIO()
-        segno.make(u, error="m").save(buf, kind="png", scale=4)
+        segno.make(u, error="m", micro=False).save(buf, kind="png", scale=4)
     return time.perf_counter() - t0, len(chunk)
 
 
@@ -113,7 +115,7 @@ def qr_version_info(urls):
     from collections import Counter
     versions = Counter()
     for u in urls[:5000]:
-        versions[segno.make(u, error="m").version] += 1
+        versions[segno.make(u, error="m", micro=False).version] += 1
     return dict(sorted(versions.items()))
 
 

@@ -166,7 +166,7 @@ PNG-Variante kostet also **3–13 USD pro Monat** Speicher.
 2. **Dateisystem-Overhead:** 1,77 Mrd. Einzeldateien à 312 B belegen bei 4-KiB-Blöcken
    real **~7 TB** statt 550 GB und sprengen übliche Inode-Budgets. Konsequenz: Codes
    gebündelt speichern (tar/xz wie im Repo üblich, SQLite, Parquet) — oder gar nicht
-   vorspeichern (siehe 6.).
+   vorspeichern (siehe Abschnitt 6).
 
 ## 6. Architekturempfehlung: on demand statt auf Vorrat
 
@@ -183,7 +183,112 @@ meist unnötig:
   werden sollen (etwa als zusätzliches Dataset-Artefakt dieses Projekts) — dann
   gebündelt als xz-Archive analog zur bestehenden `data/`-Struktur.
 
-## 7. Antwort auf die Kernfrage: „In wenigen Stunden möglich?“
+## 7. Konkreter AWS-Ausführungsplan (~512 vCPU)
+
+Falls doch auf Vorrat generiert werden soll, hier die durchgerechnete Flotte.
+Alle Zahlen aus AWS' eigenem Spot-Advisor-Feed (abgerufen 08/2026) bzw. aus dem
+Probelauf; Preise sind us-east-1, Linux.
+
+### 7.1 Flotte: 16 × c7g.8xlarge auf Spot
+
+| Posten | Wert |
+|--------|------|
+| Instanz | **c7g.8xlarge** (Graviton3, ARM64), 32 vCPU, 64 GiB |
+| Anzahl | **16** → **512 vCPU** |
+| Spot-Abbruchrate | **< 5 %** (bestes Band des Spot Advisors) |
+| Spot-Ersparnis | 65 % gegenüber On-Demand |
+| Flottenkosten | **~6,50 USD/h** Spot, 18,56 USD/h On-Demand |
+| Laufzeit | **~4,0 h** (gemessen hochgerechnet) |
+| **Gesamtkosten Rechnen** | **~26 USD Spot / ~74 USD On-Demand** |
+
+Warum c7g und nicht c7a: identische Leistung für diese Aufgabe, aber 29 %
+günstiger je vCPU on-demand und **rund doppelt so günstig auf Spot** — und vor
+allem stabiler. `c7a.48xlarge` und `c7a.12xlarge` liegen im schlechtesten
+Abbruchband (> 20 %), `c7g.8xlarge` im besten (< 5 %). Die kleineren c7g-Größen
+sind stabiler als `c7g.16xlarge` (5–10 %); 16 Instanzen streuen das Risiko
+zusätzlich. ARM ist hier gratis: `segno` ist ein `py3-none-any`-Wheel ohne
+Kompilat und ohne Laufzeitabhängigkeiten — auf Graviton gibt es nichts zu
+portieren.
+
+### 7.2 Task-Zuschnitt: 8 831 Tasks à 200 000 Codes
+
+Die Task-Größe folgt aus der Spot-Abbruchrate, nicht aus Bequemlichkeit: Ein
+abgebrochener Task wird komplett wiederholt, also darf er nicht lange laufen.
+
+- **200 000 Codes je Task ≈ 14 Minuten** — ein Abbruch kostet höchstens das.
+- **8 831 Tasks** bleiben unter dem **harten Limit von 10 000** je AWS-Batch-Array-Job
+  (nicht erhöhbar). Tasks deutlich größer zu schneiden, spart nichts und macht
+  Abbrüche teuer.
+- Bei 512 vCPUs laufen ~17 Wellen à 14 min ⇒ ~4 h.
+- Das Zwei-Minuten-Fenster einer Spot-Kündigung reicht **nicht**, um ein Artefakt
+  fertigzustellen und hochzuladen. Deshalb ist die Pipeline auf *idempotente
+  Wiederholung* ausgelegt statt auf geordnetes Austrudeln.
+
+### 7.3 Kontingente vorher prüfen — der häufigste Stolperstein
+
+| Kontingent | Code | Standard |
+|------------|------|----------|
+| Running On-Demand Standard instances | `L-1216C47A` | 5 vCPU (neuer Account), 1 152 vCPU (etabliert) |
+| All Standard Spot Instance Requests | `L-34B43A08` | 5 vCPU (neuer Account) |
+
+Beide zählen in **vCPUs, nicht in Instanzen**, und c7g wie c7a fallen beide unter
+„Standard“ — die 512 vCPU lassen sich also nicht durch Mischen von Familien
+umgehen. On-Demand und Spot sind getrennte Zähler.
+
+Bei einem etablierten Account genügen die 1 152 vCPU bereits; bei einem neuen
+Account blockieren 5 vCPU den Lauf vollständig. Ein Sprung von 5 auf 512 geht in
+die manuelle Prüfung (1–3 Werktage, kein Eskalationsweg) — **also ein bis zwei
+Wochen vorher beantragen**, nicht am Vortag. Ein Nebeneffekt, der viel Zeit
+kostet: AWS Batch meldet fehlendes Kontingent nicht als Fehler, die Jobs bleiben
+einfach unbegrenzt in `RUNNABLE` hängen.
+
+### 7.4 Orchestrierung
+
+Für einen **einmaligen** Lauf ist **EC2 Fleet (`type: instant`) + SQS + Bootstrap
+aus S3** der kürzeste Weg: kein Container-Image, keine ECR-Registry, keine
+service-linked Roles. Achtung auf das **harte 16-KB-Limit für User-Data** — das
+Bootstrap-Skript lädt die Nutzlast per `aws s3 cp` nach, statt sie einzubetten.
+
+**AWS Batch mit Array-Jobs** kostet beim ersten Mal einige Stunden Einrichtung
+(Compute Environment, Job Queue, Job Definition, ECR-Image, IAM-Rollen), liefert
+dafür Retry-Logik, `AWS_BATCH_JOB_ARRAY_INDEX` und CloudWatch-Logs geschenkt —
+die bessere Wahl, wenn der Lauf wiederholbar sein soll. `qr_pipeline.py` liest
+den Task-Index direkt aus dieser Variablen.
+
+Nicht geeignet: **Fargate** (16 vCPU je Task, Graviton2 statt Graviton3, unklares
+vCPU-Kontingent) und **ParallelCluster** (für eng gekoppeltes MPI-HPC gebaut, hier
+komplett überdimensioniert).
+
+### 7.5 S3
+
+- Ausgabe sind ~8 831 Artefakte à ~50 MB, zusammen **~0,44 TB** →
+  **PUT-Kosten 0,04 USD**. Zum Vergleich: einzelne Dateien hätten ~8 800 USD
+  gekostet. Upload nach S3 ist kostenlos, Speicher ~10 USD/Monat.
+- **Vor dem Lauf eine Lifecycle-Regel `AbortIncompleteMultipartUpload` (1 Tag)
+  setzen.** Bei Spot-Abbrüchen mitten im Upload bleiben sonst verwaiste
+  Multipart-Fragmente liegen, für die dauerhaft Speicher berechnet wird.
+- Jeder `UploadPart` zählt als PUT — bei ~50-MB-Artefakten irrelevant, bei
+  vielen kleinen Teilen nicht.
+
+### 7.6 Bootstrap auf Amazon Linux 2023 (ARM64)
+
+AMI über den SSM-Parameter beziehen statt AMI-IDs zu verdrahten:
+
+```
+/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
+```
+
+Das System-Python von AL2023 ist 3.9; Python 3.11 kommt per `dnf install
+python3.11` daneben. **Den Symlink `/usr/bin/python3` nicht umbiegen** — `dnf`
+benutzt ihn selbst und die Paketverwaltung bricht. Stattdessen `python3.11`
+explizit aufrufen:
+
+```bash
+dnf install -y python3.11 python3.11-pip
+python3.11 -m pip install segno
+```
+
+## 8. Antwort auf die Kernfrage: „In wenigen Stunden möglich?“
 
 | Interpretation                                            | Machbar in wenigen Stunden? |
 |-----------------------------------------------------------|-----------------------------|
@@ -200,7 +305,7 @@ gering. Die einzige echte Designentscheidung ist nicht *ob*, sondern *wie*: on d
 generieren statt Milliarden Kleinstdateien zu speichern, und bei Objektspeichern auf
 Request-Kosten achten.
 
-## 8. Grenzen dieser Einschätzung
+## 9. Grenzen dieser Einschätzung
 
 - Der Benchmark lief in einer Sandbox mit 4 vCPUs unbekannten Typs; dedizierte
   Cloud-Kerne sind eher schneller. Gemessen wurde reines Python — C-Implementierungen
@@ -214,11 +319,56 @@ Request-Kosten achten.
 - Cloud-Preise wurden im August 2026 aus Sekundärquellen recherchiert (Suchtreffer,
   je ≥ 2 Quellen); Spot-Preise schwanken stündlich, und Hetzner hat 2026 mehrfach
   die Preise erhöht — vor einer konkreten Beschaffung aktuelle Listenpreise prüfen.
+- Die Spot-Abbruchraten und vCPU-Zahlen in Abschnitt 7 stammen aus AWS' eigenem
+  Spot-Advisor-Feed, die On-Demand-Dollarpreise dagegen aus Aggregatoren (die
+  AWS-Preis-API war nicht erreichbar). Die Abbruchbänder sind rollierende
+  30-Tage-Mittel je Region, keine Prognose und nicht AZ-genau. Das
+  Fargate-vCPU-Kontingent `L-3032A538` blieb widersprüchlich (6 vs. 4 000) — im
+  eigenen Konto prüfen, falls Fargate doch infrage kommt.
 - Bewertet wurde die *Erzeugung* von QR-Codes; Scan-Zuverlässigkeit auf Endgeräten
   (Druckgröße, Kontrast, Fehlerkorrekturwahl) ist ein separates, ebenfalls gut
   verstandenes Thema.
 
-## 9. Reproduzierbarkeit & Quellen
+## 10. Trockenübung vor dem scharfen Lauf
+
+Der Probelauf [`qr_toy_run.sh`](qr_toy_run.sh) fährt die komplette Pipeline
+[`qr_pipeline.py`](qr_pipeline.py) im Kleinen: Er simuliert einen
+AWS-Batch-Array-Job lokal (`AWS_BATCH_JOB_ARRAY_INDEX` wird genauso gesetzt wie
+dort), verifiziert jedes Artefakt, probt Idempotenz und Spot-Abbruch und rechnet
+die Messwerte auf die Flotte hoch:
+
+```bash
+pip install segno opencv-python-headless      # Decoder optional
+./feasibility/qr_toy_run.sh                   # synthetische Domains
+TOY_INPUT=data/austria/domain2multi-at00.txt ./feasibility/qr_toy_run.sh
+```
+
+Geprüft werden die sechs Dinge, die einen 512-vCPU-Lauf ruinieren können:
+
+1. **Bilanz** — jede Eingabezeile ist erzeugt oder als Ausschuss gezählt.
+2. **Verifikation** — Prüfsumme je Artefakt plus echtes Decodieren einer
+   Stichprobe, nicht nur „Datei existiert“.
+3. **Atomarität** — es gibt keine halben Artefakte, nur `.tmp` oder fertig.
+4. **Idempotenz** — ein Wiederanlauf überspringt fertige Tasks.
+5. **Spot-Abbruch** — SIGTERM führt zu Exit 75 (`EX_TEMPFAIL`), das Fragment
+   wird verworfen, die Wiederholung liefert ein vollständiges Artefakt.
+6. **Hochrechnung** — gemessener Durchsatz → Laufzeit, Kosten, Datenmenge.
+
+Zwei Befunde, die erst der Probelauf zutage gefördert hat und die im scharfen
+Lauf teuer geworden wären:
+
+- **Micro-QR-Codes:** `segno.make()` erzeugt für sehr kurze URLs wie
+  `https://a.at` standardmäßig einen *Micro*-QR-Code (Version M1–M4) statt eines
+  normalen QR-Codes. Viele Kamera-Apps lesen die nicht. Die Zufallsstichprobe des
+  Benchmarks enthielt keinen einzigen; die alphabetisch sortierte Eingabe des
+  Probelaufs sofort mehrere. Beide Skripte setzen deshalb explizit `micro=False`.
+- **Bündelformat:** Ein reines `tar` verdreifacht den Platzbedarf, weil jeder
+  312-Byte-PNG auf zwei 512-Byte-Blöcke aufgerundet wird. `tar.xz` kommt auf
+  **249 B je Code** — kleiner als das nackte PNG — und kostet nur ~0,1 ms je
+  Code. Gemessene Gesamtausgabe: **0,44 TB** statt der 7 TB, die Einzeldateien
+  auf einem 4-KiB-Dateisystem belegt hätten.
+
+## 11. Reproduzierbarkeit & Quellen
 
 Reproduktion: `pip install segno qrcode pillow`, einen Daten-Shard entpacken
 (`xz -dk data/<land>/*.xz`), dann `python3 feasibility/qr_benchmark.py`
@@ -231,3 +381,10 @@ Bibliotheken verifizieren.
 - Datensatzstatistik: [STATS.md](../STATS.md)
 - Preisquellen (Auswahl, abgerufen 2026-08): [AWS S3 Pricing](https://aws.amazon.com/s3/pricing/), [Backblaze B2](https://www.backblaze.com/cloud-storage/pricing), [Hetzner Object Storage](https://www.hetzner.com/storage/object-storage/), economize.cloud / cloudprice.net (EC2 c7g/c7a)
 - Rohdaten des Benchmarks: [`qr_benchmark_report.json`](qr_benchmark_report.json)
+- AWS-Fakten in Abschnitt 7: [Spot Instance Advisor
+  (Feed)](https://spot-bid-advisor.s3.amazonaws.com/spot-advisor-data.json),
+  [AWS-Batch-Kontingente](https://docs.aws.amazon.com/batch/latest/userguide/service_limits.html),
+  [EC2-Spot-Kontingente](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-spot-limits.html),
+  [EC2-Fleet-Kontingente](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/fleet-quotas.html),
+  [S3-Multipart-Limits](https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html),
+  [Python unter AL2023](https://docs.aws.amazon.com/linux/al2023/ug/python.html)
