@@ -1,0 +1,50 @@
+{
+  "environment": {
+    "python": "3.11.15",
+    "cpus": 4
+  },
+  "input": {
+    "n_domains_in_file": 6007258,
+    "url_len_mean": 34.7,
+    "url_len_median": 36.0,
+    "url_len_p95": 46,
+    "url_len_max": 99
+  },
+  "timing_n_codes": 2000,
+  "results": {
+    "segno_matrix_only": {
+      "per_code_us": 3244.6,
+      "codes_per_sec_1core": 308,
+      "avg_output_bytes": null
+    },
+    "segno_png_scale4": {
+      "per_code_us": 4064.6,
+      "codes_per_sec_1core": 246,
+      "avg_output_bytes": 312
+    },
+    "segno_svg": {
+      "per_code_us": 4273.8,
+      "codes_per_sec_1core": 234,
+      "avg_output_bytes": 1604
+    },
+    "qrcode_pil_png": {
+      "per_code_us": 5958.2,
+      "codes_per_sec_1core": 168,
+      "avg_output_bytes": 706
+    }
+  },
+  "multicore_segno_png": {
+    "n_codes": 40000,
+    "n_procs": 4,
+    "wall_seconds": 43.71,
+    "codes_per_sec_total": 915
+  },
+  "qr_versions_ecc_M": {
+    "1": 10,
+    "2": 1293,
+    "3": 2057,
+    "4": 1637,
+    "5": 1,
+    "6": 2
+  }
+}
