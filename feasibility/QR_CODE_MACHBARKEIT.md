@@ -5,7 +5,7 @@ Machbarkeitseinschätzung: Generierung von QR-Codes aus URLs
 technisch vollständig gelöst, extrem günstig und in wenigen Stunden umsetzbar. Ein
 funktionierender Prototyp ist in unter einer Stunde fertig; selbst die Massengenerierung
 für den **gesamten Datensatz dieses Repositories (1.766.025.618 Domains)** ist mit
-~500 Cloud-vCPUs in etwa 4 Stunden und für unter 100 USD Rechenkosten machbar.
+~500 Cloud-vCPUs in gut 4 Stunden und für unter 100 USD Rechenkosten machbar.
 Auf einem einzelnen 4-Kern-Rechner dauert der Gesamtdatensatz ~3 Wochen; 1 Million
 Codes dauern dort nur ~18 Minuten.
 
@@ -22,7 +22,7 @@ Bewertet wird die Machbarkeit der Erzeugung von QR-Codes aus URLs hinsichtlich:
 1. **Wissenschaftlich-technischer Machbarkeit** — ist das Problem gelöst, gibt es Risiken?
 2. **Rechenressourcen** — CPU-Zeit, Speicher, Skalierung
 3. **Kosten** — Software, Rechenzeit, Speicherung
-4. **Zeitaufwand** — „ist so etwas in wenigen Stunden möglich?"
+4. **Zeitaufwand** — „ist so etwas in wenigen Stunden möglich?“
 
 Bezugsrahmen ist dieses Repository: der Domains-Project-Datensatz mit
 **1.766.025.618 Domains** (siehe [STATS.md](../STATS.md)), aus denen sich URLs der Form
@@ -36,13 +36,15 @@ aktuell als **ISO/IEC 18004:2024** (4. Ausgabe, August 2024). Der Algorithmus is
 deterministisch: Eingabetext → Segmentierung (Byte-Modus für URLs) →
 Reed-Solomon-Fehlerkorrektur → Matrixplatzierung → Maskierung. Es gibt keine offenen
 wissenschaftlichen Fragen, keine Modellunsicherheit und keine Trainingsdaten; dieselbe
-URL ergibt immer denselben Code. Ausgereifte Open-Source-Implementierungen existieren
+URL ergibt bei gleicher Bibliothek und gleichen Parametern immer denselben Code (die
+Norm lässt Implementierungen etwas Spielraum, z. B. bei der Maskenwahl). Ausgereifte Open-Source-Implementierungen existieren
 für praktisch jede Sprache (Python: `segno`, `qrcode`; C: `libqrencode`; JavaScript,
 Go, Rust, Java u. v. m.), alle kostenlos.
 
 **Passen URLs überhaupt in einen QR-Code?** Die Byte-Modus-Kapazität nach
 ISO/IEC 18004 (verifiziert durch Kreuzvalidierung zweier unabhängiger
-Implementierungen, `segno` 1.6.6 und `qrcode` 8.2 — alle 24 Werte identisch):
+Implementierungen, `segno` 1.6.6 und `qrcode` 8.2 — alle geprüften Werte identisch,
+reproduzierbar via [`qr_capacity_check.py`](qr_capacity_check.py)):
 
 | Version | Module  | ECC L | ECC M | ECC Q | ECC H |
 |--------:|:-------:|------:|------:|------:|------:|
@@ -53,22 +55,25 @@ Implementierungen, `segno` 1.6.6 und `qrcode` 8.2 — alle 24 Werte identisch):
 | 5       | 37×37   | 106   | 84    | 60    | 44    |
 | 40      | 177×177 | 2 953 | 2 331 | 1 663 | 1 273 |
 
-Die URLs dieses Datensatzes (gemessen an 6 Mio. realen Domains, Präfix `https://`)
-sind im Mittel **34,7 Zeichen** lang (Median 36, 95-Perzentil 46, Maximum 99). Damit
+Die URLs dieses Datensatzes (gemessen an einer Zufallsstichprobe von 200 000 aus
+6 Mio. realen Domains, Präfix `https://`) sind im Mittel **34,7 Zeichen** lang
+(Median 36, 95-Perzentil 46; Maximum der Stichprobe 99, des vollen Shards 130). Damit
 genügt fast immer **Version 2–4** bei mittlerer Fehlerkorrektur (ECC M) — kleine,
 gut scannbare Codes. Gemessene Versionsverteilung (n = 5 000): v1 0,2 %, v2 25,9 %,
-**v3 41,1 %**, v4 32,7 %, v5–v6 < 0,1 %. Die Verteilung deckt sich exakt mit der
-Kapazitätstabelle — ein Konsistenzbeleg für beide Messungen. Selbst extreme URLs bis
-2 953 Bytes passen (Version 40, ECC L); praktisch relevant ist das hier nicht.
+**v3 41,1 %**, v4 32,7 %, v5–v6 < 0,1 %. Die Verteilung passt zur gemessenen
+Längenverteilung (Median 36 Zeichen → Version 3 mit Kapazität 42). Selbst die längste
+URL des vollen Shards (130 Zeichen) passt bequem in Version 8 bei ECC M
+(Kapazität 152 Bytes, siehe [`qr_capacity_check.py`](qr_capacity_check.py));
+die theoretische Obergrenze liegt bei 2 953 Bytes (Version 40, ECC L).
 
 ## 3. Empirische Messung (Benchmark)
 
 Methodik: Benchmark in dieser Repository-Umgebung (Python 3.11.15, 4 vCPUs, 15 GiB
 RAM), Eingabe: Zufallsstichprobe aus **6.007.258 realen Domains** des Datensatzes
 (Shard `data/austria`), als `https://`-URLs. Skript: [`qr_benchmark.py`](qr_benchmark.py),
-Rohdaten: [`qr_benchmark_report.json`](qr_benchmark_report.json). Je Variante wurden
-2 000 Codes einzeln vermessen, dazu ein Durchsatztest mit 40 000 Codes auf allen
-4 Kernen.
+Rohdaten: [`qr_benchmark_report.json`](qr_benchmark_report.json). Je Variante wurde
+die Erzeugung von 2 000 Codes gemessen (ausgewiesen ist der Mittelwert je Code), dazu
+ein Durchsatztest mit 40 000 Codes auf allen 4 Kernen.
 
 | Variante                        | Zeit/Code | Codes/s (1 Kern) | ø Dateigröße |
 |---------------------------------|----------:|-----------------:|-------------:|
@@ -80,7 +85,7 @@ Rohdaten: [`qr_benchmark_report.json`](qr_benchmark_report.json). Je Variante wu
 
 Kernbefund: **Ein einzelner QR-Code kostet ~4 Millisekunden CPU-Zeit und ~300 Bytes
 Speicher.** Die Parallelisierung skaliert nahezu linear (93 % Effizienz auf 4 Kernen),
-da die Aufgabe „embarrassingly parallel" ist — jeder Code ist unabhängig.
+da die Aufgabe „embarrassingly parallel“ ist — jeder Code ist unabhängig.
 
 *Konservativität:* Gemessen wurde eine reine Python-Implementierung in einer
 Sandbox-Umgebung. C-Bibliotheken wie `libqrencode` sind erfahrungsgemäß nochmals
@@ -99,14 +104,16 @@ Basis: 246 Codes/s je Kern (PNG) bzw. 915 Codes/s auf der 4-Kern-Maschine.
 | 100 Mio. URLs                  | ~30 Stunden                            | ~113               |
 | **1,766 Mrd. (Gesamtdatensatz)** | **~22 Tage**                         | **~2 000**         |
 
-Für den Gesamtdatensatz **„in wenigen Stunden"** (Ziel: 4 h) werden
-1,766 Mrd. ÷ (4 × 3 600 s) ≈ 123 000 Codes/s benötigt, also **~500 vCPUs**
-(125 Instanzen à 4 vCPUs). Der Datensatz liegt bereits in 1 518 Länder-Shards vor —
+Für den Gesamtdatensatz **„in wenigen Stunden“** (Ziel: 4 h) werden
+1,766 Mrd. ÷ (4 × 3 600 s) ≈ 123 000 Codes/s benötigt, also **~500 vCPUs** bei
+idealer Skalierung — mit dem gemessenen Parallelisierungsverlust von 7 % eher
+~540 vCPUs (135 Instanzen à 4 vCPUs) bzw. gut 4 Stunden mit 500 vCPUs.
+Der Datensatz liegt bereits in 1 518 Länder-Shards vor —
 die Verteilung auf Worker ist trivial. RAM ist irrelevant (< 100 MB je Prozess),
 der Engpass ist reine CPU-Zeit und ggf. Schreib-I/O.
 
 Grobe Energieabschätzung: ~2 000 Kernstunden × 5–10 W je Kern ≈ **10–20 kWh** für den
-kompletten Datensatz — weniger als eine Tankfüllung, im Stil der „Random facts" des
+kompletten Datensatz — weniger als eine Tankfüllung, im Stil der „Random facts“ des
 Projekt-READMEs.
 
 ## 5. Kostenschätzung
@@ -115,7 +122,7 @@ Projekt-READMEs.
 
 Alle genannten Bibliotheken sind Open Source (BSD/MIT). Es fallen keine Lizenz- oder
 API-Kosten an. Der QR-Code selbst ist patentfrei nutzbar (Denso Wave übt seine
-Patente für spezifikationskonforme Codes nicht aus); „QR Code" ist lediglich eine
+Patente für spezifikationskonforme Codes nicht aus); „QR Code“ ist lediglich eine
 eingetragene Marke.
 
 ### 5.2 Rechenkosten (Cloud, Stand August 2026, recherchiert)
@@ -125,14 +132,17 @@ eingetragene Marke.
 | AWS c7g.xlarge (us-east-1)              | 4     | 0,145 USD      | On-Demand     |
 | AWS c7a.xlarge (us-east-1)              | 4     | 0,205 USD      | On-Demand     |
 | AWS c7a.xlarge (us-east-1a)             | 4     | ~0,094 USD     | Spot (Momentaufnahme, schwankt) |
-| Hetzner CCX23 (US-Standorte)            | 4     | ~0,141 USD     | abgeleitet aus 102,99 USD/Monat |
+| Hetzner CCX23 (US-Standorte)            | 4     | ~0,141 USD     | abgeleitet aus 102,99 USD/Monat; Quellen uneinheitlich (32–103 USD/Monat) |
+| Hetzner CPX31 (shared vCPU, US)         | 4     | ~0,034 USD     | abgeleitet aus 24,99 USD/Monat (Stand 04/2026, spätere Erhöhung möglich) |
 
 Daraus für die **Massengenerierung des Gesamtdatensatzes (~2 000 Kernstunden =
 500 Instanzstunden à 4 vCPUs)**:
 
 - On-Demand (c7g.xlarge): 500 h × 0,145 USD ≈ **73 USD**; mit Orchestrierungs-/I/O-Puffer < 100 USD
-- Spot-Instanzen: typischerweise 40–70 % darunter, also grob **25–45 USD**
-- Sparvariante: 1 einzelner Cloud-Server (~25–103 USD/Monat) rechnet den Datensatz in ~3 Wochen durch
+- Spot-Instanzen: typischerweise 40–70 % unter On-Demand, also grob **20–50 USD**
+  (40–70 % Rabatt ≈ 22–44 USD; der zitierte c7a-Spot-Schnappschuss ergäbe ~47 USD)
+- Sparvariante: ein einzelner 4-vCPU-Server (z. B. Hetzner CPX31 ~25 USD/Monat,
+  CCX23 32–103 USD/Monat je nach Quelle) rechnet den Datensatz in ~3 Wochen durch
 
 Für kleine Mengen (bis einige Millionen Codes) sind die Rechenkosten praktisch null —
 das erledigt jeder Laptop nebenbei.
@@ -151,7 +161,7 @@ PNG-Variante kostet also **3–13 USD pro Monat** Speicher.
 **Zwei nicht offensichtliche Kostenfallen:**
 
 1. **Request-Kosten dominieren bei S3:** 1,766 Mrd. einzelne PUT-Uploads kosten bei
-   ~0,005 USD je 1 000 Requests einmalig **~8 800 USD** — das 100-Fache der
+   ~0,005 USD je 1 000 Requests einmalig **~8 800 USD** — mehr als das 100-Fache der
    Rechenkosten. Backblaze B2 (Uploads kostenlos) oder gebündelte Ablage vermeiden das.
 2. **Dateisystem-Overhead:** 1,77 Mrd. Einzeldateien à 312 B belegen bei 4-KiB-Blöcken
    real **~7 TB** statt 550 GB und sprengen übliche Inode-Budgets. Konsequenz: Codes
@@ -160,8 +170,9 @@ PNG-Variante kostet also **3–13 USD pro Monat** Speicher.
 
 ## 6. Architekturempfehlung: on demand statt auf Vorrat
 
-Da ein QR-Code eine **deterministische Funktion der URL** ist und seine Erzeugung nur
-~4 ms kostet, ist Vorratsgenerierung meist unnötig:
+Da ein QR-Code — bei fixierter Bibliothek und Parametern — eine **deterministische
+Funktion der URL** ist und seine Erzeugung nur ~4 ms kostet, ist Vorratsgenerierung
+meist unnötig:
 
 - **Serverseitig on demand:** Ein Endpunkt `GET /qr?url=…` (z. B. FastAPI + `segno`)
   liefert den Code in Millisekunden; ~250 Codes/s je Kern genügen für erheblichen
@@ -172,7 +183,7 @@ Da ein QR-Code eine **deterministische Funktion der URL** ist und seine Erzeugun
   werden sollen (etwa als zusätzliches Dataset-Artefakt dieses Projekts) — dann
   gebündelt als xz-Archive analog zur bestehenden `data/`-Struktur.
 
-## 7. Antwort auf die Kernfrage: „In wenigen Stunden möglich?"
+## 7. Antwort auf die Kernfrage: „In wenigen Stunden möglich?“
 
 | Interpretation                                            | Machbar in wenigen Stunden? |
 |-----------------------------------------------------------|-----------------------------|
@@ -181,7 +192,7 @@ Da ein QR-Code eine **deterministische Funktion der URL** ist und seine Erzeugun
 | Web-API oder Browser-Lösung, einsatzbereit                | **Ja — 2–4 Stunden** inkl. Deployment |
 | 1 Mio. Codes erzeugen                                     | **Ja — ~18 Minuten** auf 4 Kernen |
 | Gesamtdatensatz (1,77 Mrd.) auf einem Rechner             | Nein — ~3 Wochen (aber unbeaufsichtigt) |
-| Gesamtdatensatz mit ~500 Cloud-vCPUs                      | **Ja — ~4 Stunden, < 100 USD** |
+| Gesamtdatensatz mit ~500 Cloud-vCPUs                      | **Ja — gut 4 Stunden, < 100 USD** |
 
 **Gesamturteil: uneingeschränkt machbar.** Es bestehen keine wissenschaftlichen oder
 technischen Risiken; Kosten und Ressourcenbedarf sind selbst im Milliardenmaßstab
@@ -194,10 +205,12 @@ Request-Kosten achten.
 - Der Benchmark lief in einer Sandbox mit 4 vCPUs unbekannten Typs; dedizierte
   Cloud-Kerne sind eher schneller. Gemessen wurde reines Python — C-Implementierungen
   wären schneller. Beides macht die Schätzungen konservativ.
-- Die URL-Längenverteilung stammt aus einem Länder-Shard (6 Mio. Domains, Österreich);
-  andere TLDs können leicht abweichen, ändern aber nichts an der Versionsklasse
-  (v2–v4). Internationalisierte Domains liegen im Datensatz als ASCII/Punycode vor
-  und sind damit unproblematisch für den Byte-Modus.
+- Die URL-Längenverteilung stammt aus einer 200 000er-Zufallsstichprobe eines
+  Länder-Shards (6 Mio. Domains, Österreich); andere TLDs können leicht abweichen,
+  ändern aber nichts an der Versionsklasse (v2–v4). Internationalisierte Domains
+  liegen fast ausschließlich als ASCII/Punycode vor (im untersuchten Shard 4
+  Nicht-ASCII-Ausnahmen unter 6 Mio., teils mit defekter Kodierung) und sind für
+  den Byte-Modus unproblematisch.
 - Cloud-Preise wurden im August 2026 aus Sekundärquellen recherchiert (Suchtreffer,
   je ≥ 2 Quellen); Spot-Preise schwanken stündlich, und Hetzner hat 2026 mehrfach
   die Preise erhöht — vor einer konkreten Beschaffung aktuelle Listenpreise prüfen.
@@ -209,7 +222,9 @@ Request-Kosten achten.
 
 Reproduktion: `pip install segno qrcode pillow`, einen Daten-Shard entpacken
 (`xz -dk data/<land>/*.xz`), dann `python3 feasibility/qr_benchmark.py`
-(Pfad der Domainliste via Umgebungsvariable `DOMAINS_SAMPLE`).
+(Pfad der Domainliste via Umgebungsvariable `DOMAINS_SAMPLE`). Die Kapazitätstabelle
+in Abschnitt 2 lässt sich mit `python3 feasibility/qr_capacity_check.py` gegen beide
+Bibliotheken verifizieren.
 
 - ISO/IEC 18004:2024 — <https://www.iso.org/standard/83389.html>
 - Bibliotheken: [segno](https://github.com/heuer/segno), [python-qrcode](https://github.com/lincolnloop/python-qrcode), [libqrencode](https://fukuchi.org/works/qrencode/)
