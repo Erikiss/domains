@@ -314,29 +314,37 @@ python3.11 -m pip install segno
 Für Teams, die bereits einen GPU-Cloud-Workflow haben (rclone/Drive statt S3,
 Pods statt Instanzen), liegt [`qr_gpuai_start.sh`](qr_gpuai_start.sh) bei. Es
 folgt den erprobten Konventionen eines früheren GPU-Projekts des Nutzers
-(Vollscan-Runner) und übernimmt daraus die Muster, die sich dort bewährt haben:
+(Vollscan-Runner) und übernimmt daraus diese Muster:
 
-- **Positivkontrolle vor dem Fan-out** — der erste Task läuft allein und wird
-  vollständig verifiziert (Prüfsumme + Decodierung); erst danach starten die
-  restlichen Worker. Ein systematischer Fehler kostet so Minuten, nicht den Lauf.
-- **Messung vor Verpflichtung** — das Skript misst den echten Durchsatz der
-  Maschine am ersten Task und druckt Laufzeit- und Kostenprojektion, bevor die
-  lange Rechnung beginnt.
+- **Verifikations-Gate vor dem Fan-out** (in Anlehnung an die Positivkontrolle
+  des Vollscan-Projekts — dort ein echter Known-Positive-Test, hier Prüfsumme
+  plus Decodierung des ersten Artefakts): der erste Task läuft allein und wird
+  vollständig geprüft; erst danach starten die restlichen Worker. Ein
+  systematischer Fehler kostet so Minuten, nicht den Lauf.
 - **Wiederholrunden** (bis zu 3) über offene Tasks statt Einzel-Retry-Logik.
-- **Zwischenstand-Verschiebung alle 120 s** nach Drive (`rclone move`); fertige
-  Artefakte sind atomar, es kann nichts Halbes ankommen.
+- **Laufende Zwischenstand-Verschiebung** nach Drive (`rclone move`) — im
+  Original ein frei laufender 120-s-Sync, hier bewusst auf racefreie
+  Synchronpunkte nach jeder Runde verlegt, damit der Sync nicht mit der
+  Wiederaufsetz-Prüfung um Dateien wetteifert.
 - **Marker-Dateien in Drive** für Shard-Fortschritt und POD/PODS-Streifen für
   mehrere Pods — Wiederaufsetzen ist derselbe Befehl noch einmal.
 - **Kostenuhr-Warnung**: Container-Pods können sich nicht selbst abschalten;
   das Skript endet mit einem unübersehbaren „POD STOPPEN"-Hinweis.
 
+Neu hinzugekommen (nicht aus dem Altprojekt): **Messung vor Verpflichtung** —
+das Skript misst den echten Durchsatz der Maschine am ersten Task und druckt
+Laufzeit- und Kostenprojektion, bevor die lange Rechnung beginnt. Außerdem
+bekommen Übungsläufe (gekappte Zeilen, andere Task-Größe) automatisch einen
+eigenen Namensraum, damit sie einen späteren Echtlauf nicht verunreinigen.
+
 Die Ökonomie ist klar anders als bei der AWS-Flotte: Die QR-Erzeugung nutzt
 **keine GPU** — auf einem B300-Pod rechnet nur die Host-CPU, das
 GPU-Silizium liegt brach. Bei ~7,76 USD/h und typischen 100–200 Host-vCPUs
-landet der Gesamtdatensatz bei grob 9–18 h ⇒ **70–140 USD** gegenüber
-~26 USD für die reine CPU-Spot-Flotte. Sinnvoll ist der Pod-Weg also nur,
-wenn die Maschine ohnehin läuft, Credits vorhanden sind oder der
-Drive-Workflow den Ausschlag gibt — nicht aus Kostengründen.
+(gemessene ~248 Codes/s je Prozess, 7 % Parallelisierungsverlust) landet der
+Gesamtdatensatz bei grob **11–21 h ⇒ ~80–165 USD** gegenüber ~26 USD für die
+reine CPU-Spot-Flotte. Sinnvoll ist der Pod-Weg also nur, wenn die Maschine
+ohnehin läuft, Credits vorhanden sind oder der Drive-Workflow den Ausschlag
+gibt — nicht aus Kostengründen.
 
 Übungsmodus (klein, lokal, ohne Drive):
 
