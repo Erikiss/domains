@@ -235,6 +235,15 @@ Beide zählen in **vCPUs, nicht in Instanzen**, und c7g wie c7a fallen beide unt
 „Standard“ — die 512 vCPU lassen sich also nicht durch Mischen von Familien
 umgehen. On-Demand und Spot sind getrennte Zähler.
 
+Prüfen lässt sich das vorab per CLI:
+
+```bash
+aws service-quotas get-service-quota --service-code ec2 \
+  --quota-code L-1216C47A --query 'Quota.Value'   # On-Demand
+aws service-quotas get-service-quota --service-code ec2 \
+  --quota-code L-34B43A08 --query 'Quota.Value'   # Spot
+```
+
 Bei einem etablierten Account genügen die 1 152 vCPU bereits; bei einem neuen
 Account blockieren 5 vCPU den Lauf vollständig. Ein Sprung von 5 auf 512 geht in
 die manuelle Prüfung (1–3 Werktage, kein Eskalationsweg) — **also ein bis zwei
@@ -286,6 +295,42 @@ explizit aufrufen:
 ```bash
 dnf install -y python3.11 python3.11-pip
 python3.11 -m pip install segno
+```
+
+### 7.7 Alternative: gpu.ai-Pod (z. B. B300) statt AWS-Flotte
+
+Für Teams, die bereits einen GPU-Cloud-Workflow haben (rclone/Drive statt S3,
+Pods statt Instanzen), liegt [`qr_gpuai_start.sh`](qr_gpuai_start.sh) bei. Es
+folgt den erprobten Konventionen eines früheren GPU-Projekts des Nutzers
+(Vollscan-Runner) und übernimmt daraus die Muster, die sich dort bewährt haben:
+
+- **Positivkontrolle vor dem Fan-out** — der erste Task läuft allein und wird
+  vollständig verifiziert (Prüfsumme + Decodierung); erst danach starten die
+  restlichen Worker. Ein systematischer Fehler kostet so Minuten, nicht den Lauf.
+- **Messung vor Verpflichtung** — das Skript misst den echten Durchsatz der
+  Maschine am ersten Task und druckt Laufzeit- und Kostenprojektion, bevor die
+  lange Rechnung beginnt.
+- **Wiederholrunden** (bis zu 3) über offene Tasks statt Einzel-Retry-Logik.
+- **Zwischenstand-Verschiebung alle 120 s** nach Drive (`rclone move`); fertige
+  Artefakte sind atomar, es kann nichts Halbes ankommen.
+- **Marker-Dateien in Drive** für Shard-Fortschritt und POD/PODS-Streifen für
+  mehrere Pods — Wiederaufsetzen ist derselbe Befehl noch einmal.
+- **Kostenuhr-Warnung**: Container-Pods können sich nicht selbst abschalten;
+  das Skript endet mit einem unübersehbaren „POD STOPPEN"-Hinweis.
+
+Die Ökonomie ist klar anders als bei der AWS-Flotte: Die QR-Erzeugung nutzt
+**keine GPU** — auf einem B300-Pod rechnet nur die Host-CPU, das
+GPU-Silizium liegt brach. Bei ~7,76 USD/h und typischen 100–200 Host-vCPUs
+landet der Gesamtdatensatz bei grob 9–18 h ⇒ **70–140 USD** gegenüber
+~26 USD für die reine CPU-Spot-Flotte. Sinnvoll ist der Pod-Weg also nur,
+wenn die Maschine ohnehin läuft, Credits vorhanden sind oder der
+Drive-Workflow den Ausschlag gibt — nicht aus Kostengründen.
+
+Übungsmodus (klein, lokal, ohne Drive):
+
+```bash
+QR_LIMIT_SHARDS=1 QR_TEST_ZEILEN=40000 QR_CODES_JE_TASK=10000 \
+QR_DRIVE_ZIEL= QR_DATEN=./data bash feasibility/qr_gpuai_start.sh
 ```
 
 ## 8. Antwort auf die Kernfrage: „In wenigen Stunden möglich?“
