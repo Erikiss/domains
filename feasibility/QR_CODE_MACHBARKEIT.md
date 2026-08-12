@@ -247,7 +247,19 @@ aws service-quotas get-service-quota --service-code ec2 \
 Bei einem etablierten Account genügen die 1 152 vCPU bereits; bei einem neuen
 Account blockieren 5 vCPU den Lauf vollständig. Ein Sprung von 5 auf 512 geht in
 die manuelle Prüfung (1–3 Werktage, kein Eskalationsweg) — **also ein bis zwei
-Wochen vorher beantragen**, nicht am Vortag. Ein Nebeneffekt, der viel Zeit
+Wochen vorher beantragen**, nicht am Vortag.
+
+Zwei Einordnungen, die den Quota-Ärger relativieren:
+
+- **Das ist nicht die GPU-Quota.** Die als zäh bekannte Freischaltung „großer
+  Maschinen" betrifft die P-Familie (`L-417A185B`, GPU-Instanzen) — die braucht
+  dieser Lauf nicht. C-Familie-Erhöhungen genehmigt AWS deutlich routinierter.
+- **Die Quota kauft nur Wanduhrzeit, kein Geld.** Die ~2 000 Kernstunden sind
+  fix: 512 vCPU ⇒ ~4 h, 128 vCPU ⇒ ~16 h, 64 vCPU ⇒ ~31 h — die Kosten bleiben
+  jeweils ~26 USD (Spot). Da die Pipeline idempotent und unbeaufsichtigt läuft,
+  ist ein Wochenend-Lauf auf kleiner Quota ein vollwertiger Plan B ohne Antrag;
+  Spot und On-Demand sind zudem getrennte Zähler. Plan C ganz ohne Quotas ist
+  der Pod-Weg aus Abschnitt 7.7. Ein Nebeneffekt, der viel Zeit
 kostet: AWS Batch meldet fehlendes Kontingent nicht als Fehler, die Jobs bleiben
 einfach unbegrenzt in `RUNNABLE` hängen.
 
